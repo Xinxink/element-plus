@@ -1,7 +1,7 @@
 import {
+  computed,
   defineComponent,
   Fragment,
-  h,
   inject,
   nextTick,
   onBeforeUnmount,
@@ -10,30 +10,32 @@ import {
   ref,
   watch,
 } from 'vue'
-import { addResizeListener, removeResizeListener } from '@element-plus/utils'
-import { elFormItemKey, elFormKey } from '@element-plus/tokens'
-import type { ResizableElement, Nullable } from '@element-plus/utils'
-
+import { useResizeObserver } from '@vueuse/core'
+import { throwError } from '@element-plus/utils'
+import { formItemContextKey, formContextKey } from '@element-plus/tokens'
+import { useNamespace } from '@element-plus/hooks'
 import type { CSSProperties } from 'vue'
 
+const COMPONENT_NAME = 'ElLabelWrap'
 export default defineComponent({
-  name: 'ElLabelWrap',
+  name: COMPONENT_NAME,
   props: {
     isAutoWidth: Boolean,
     updateAll: Boolean,
   },
-  setup(props, { slots }) {
-    const el = ref<Nullable<HTMLElement>>(null)
-    const elForm = inject(elFormKey)
-    const elFormItem = inject(elFormItemKey)
 
+  setup(props, { slots }) {
+    const formContext = inject(formContextKey)
+    if (!formContext) throwError(COMPONENT_NAME, 'can not inject form context.')
+
+    const formItemContext = inject(formItemContextKey)
+    if (!formItemContext)
+      throwError(COMPONENT_NAME, 'can not inject form-item context.')
+
+    const ns = useNamespace('form')
+
+    const el = ref<HTMLElement>()
     const computedWidth = ref(0)
-    watch(computedWidth, (val, oldVal) => {
-      if (props.updateAll) {
-        elForm.registerLabelWidth(val, oldVal)
-        elFormItem.updateComputedLabelWidth(val)
-      }
-    })
 
     const getLabelWidth = () => {
       if (el.value?.firstElementChild) {
@@ -43,13 +45,14 @@ export default defineComponent({
         return 0
       }
     }
+
     const updateLabelWidth = (action = 'update') => {
       nextTick(() => {
         if (slots.default && props.isAutoWidth) {
           if (action === 'update') {
             computedWidth.value = getLabelWidth()
           } else if (action === 'remove') {
-            elForm.deregisterLabelWidth(computedWidth.value)
+            formContext.deregisterLabelWidth(computedWidth.value)
           }
         }
       })
@@ -57,53 +60,50 @@ export default defineComponent({
     const updateLabelWidthFn = () => updateLabelWidth('update')
 
     onMounted(() => {
-      addResizeListener(
-        el.value.firstElementChild as ResizableElement,
-        updateLabelWidthFn
-      )
       updateLabelWidthFn()
     })
-
-    onUpdated(updateLabelWidthFn)
-
     onBeforeUnmount(() => {
       updateLabelWidth('remove')
-      removeResizeListener(
-        el.value?.firstElementChild as ResizableElement,
-        updateLabelWidthFn
-      )
+    })
+    onUpdated(() => updateLabelWidthFn())
+
+    watch(computedWidth, (val, oldVal) => {
+      if (props.updateAll) {
+        formContext.registerLabelWidth(val, oldVal)
+        formItemContext.updateComputedLabelWidth(val)
+      }
     })
 
-    function render() {
+    useResizeObserver(
+      computed(() => el.value?.firstElementChild as HTMLElement | null),
+      updateLabelWidthFn
+    )
+
+    return () => {
       if (!slots) return null
+
       if (props.isAutoWidth) {
-        const autoLabelWidth = elForm.autoLabelWidth
-        const style = {} as CSSProperties
+        const autoLabelWidth = formContext.autoLabelWidth
+        const style: CSSProperties = {}
         if (autoLabelWidth && autoLabelWidth !== 'auto') {
           const marginWidth = Math.max(
             0,
             parseInt(autoLabelWidth, 10) - computedWidth.value
           )
           const marginPosition =
-            elForm.labelPosition === 'left' ? 'marginRight' : 'marginLeft'
+            formContext.labelPosition === 'left' ? 'marginRight' : 'marginLeft'
           if (marginWidth) {
             style[marginPosition] = `${marginWidth}px`
           }
         }
-        return h(
-          'div',
-          {
-            ref: el,
-            class: ['el-form-item__label-wrap'],
-            style,
-          },
-          slots.default?.()
+        return (
+          <div ref={el} class={[ns.be('item', 'label-wrap')]} style={style}>
+            {slots.default?.()}
+          </div>
         )
       } else {
-        return h(Fragment, { ref: el }, slots.default?.())
+        return <Fragment ref={el}>{slots.default?.()}</Fragment>
       }
     }
-
-    return render
   },
 })
